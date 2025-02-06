@@ -1,112 +1,206 @@
-let tasks = JSON.parse(localStorage.getItem('tasks')) || [];
-let currentFilter = 'all';
+// Task management and storage functionality
+let tasks = [];
+const STORAGE_KEY = 'taskManagerTasks';
 
+// Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
+    loadTasksFromStorage();
     renderTasks();
-    updateCounters();
+    updateStats();
+    requestNotificationPermission();
 });
 
-document.getElementById('taskInput').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        addTask();
+// Request notification permission
+async function requestNotificationPermission() {
+    if ('Notification' in window) {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+            console.log('Notification permission denied');
+        }
     }
+}
+
+// Load tasks from local storage
+function loadTasksFromStorage() {
+    const storedTasks = localStorage.getItem(STORAGE_KEY);
+    if (storedTasks) {
+        tasks = JSON.parse(storedTasks);
+        // Reestablish notification timeouts for existing tasks
+        tasks.forEach(task => {
+            if (!task.completed) {
+                setNotificationForTask(task);
+            }
+        });
+    }
+}
+
+// Save tasks to local storage
+function saveTasksToStorage() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+}
+
+// Add new task
+document.getElementById('taskForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    
+    const taskInput = document.getElementById('taskInput');
+    const deadlineInput = document.getElementById('deadlineInput');
+    
+    const newTask = {
+        id: Date.now(),
+        text: taskInput.value,
+        deadline: new Date(deadlineInput.value).getTime(),
+        completed: false,
+        notified: false
+    };
+    
+    tasks.push(newTask);
+    saveTasksToStorage();
+    setNotificationForTask(newTask);
+    
+    taskInput.value = '';
+    deadlineInput.value = '';
+    
+    renderTasks();
+    updateStats();
 });
 
-function addTask() {
-    const input = document.getElementById('taskInput');
-    const taskText = input.value.trim();
-    
-    if (taskText) {
-        const task = {
-            id: Date.now(),
-            text: taskText,
-            completed: false,
-            createdAt: new Date()
-        };
+// Set notification for a task
+function setNotificationForTask(task) {
+    if (!task.completed && !task.notified) {
+        const reminderTime = parseInt(document.getElementById('reminderTime').value);
+        const notificationTime = task.deadline - (reminderTime * 60 * 1000);
         
-        tasks.push(task);
-        saveTasks();
-        input.value = '';
-        renderTasks();
-        updateCounters();
+        if (notificationTime > Date.now()) {
+            setTimeout(() => {
+                sendNotification(task);
+            }, notificationTime - Date.now());
+        }
     }
 }
 
-function toggleTask(id) {
-    tasks = tasks.map(task => {
-        if (task.id === id) {
-            return { ...task, completed: !task.completed };
+// Send notification
+function sendNotification(task) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+        const notification = new Notification('Task Reminder', {
+            body: `Task "${task.text}" is due in ${document.getElementById('reminderTime').value} minutes!`,
+            icon: '/favicon.ico'
+        });
+        
+        // Mark task as notified
+        const taskIndex = tasks.findIndex(t => t.id === task.id);
+        if (taskIndex !== -1) {
+            tasks[taskIndex].notified = true;
+            saveTasksToStorage();
         }
-        return task;
-    });
-    
-    saveTasks();
-    renderTasks();
-    updateCounters();
+    }
 }
 
-function deleteTask(id) {
-    tasks = tasks.filter(task => task.id !== id);
-    saveTasks();
-    renderTasks();
-    updateCounters();
-}
-
-function filterTasks(filter) {
-    currentFilter = filter;
-    
-    // Update active state of filter buttons
-    document.querySelectorAll('.filters button').forEach(btn => {
-        btn.classList.remove('active');
-        if (btn.textContent.toLowerCase() === filter) {
-            btn.classList.add('active');
-        }
-    });
-    
-    renderTasks();
-}
-
-function clearCompleted() {
-    tasks = tasks.filter(task => !task.completed);
-    saveTasks();
-    renderTasks();
-    updateCounters();
-}
+// Render tasks based on current filter
+let currentFilter = 'all';
 
 function renderTasks() {
     const taskList = document.getElementById('taskList');
     taskList.innerHTML = '';
     
-    let filteredTasks = tasks;
-    if (currentFilter === 'active') {
-        filteredTasks = tasks.filter(task => !task.completed);
-    } else if (currentFilter === 'completed') {
-        filteredTasks = tasks.filter(task => task.completed);
-    }
-    
-    filteredTasks.sort((a, b) => b.createdAt - a.createdAt);
+    const filteredTasks = filterTasksList(tasks, currentFilter);
     
     filteredTasks.forEach(task => {
         const li = document.createElement('li');
-        li.className = task.completed ? 'completed' : '';
+        li.className = 'task-item';
+        if (task.completed) li.classList.add('completed');
+        
+        const deadline = new Date(task.deadline);
+        const isOverdue = !task.completed && deadline < new Date();
+        if (isOverdue) li.classList.add('overdue');
         
         li.innerHTML = `
             <input type="checkbox" ${task.completed ? 'checked' : ''} 
-                onchange="toggleTask(${task.id})">
-            <span>${task.text}</span>
-            <button onclick="deleteTask(${task.id})">Delete</button>
+                   onchange="toggleTask(${task.id})">
+            <span class="task-text">${task.text}</span>
+            <span class="deadline ${isOverdue ? 'overdue' : ''}">
+                ${deadline.toLocaleString()}
+            </span>
+            <button onclick="deleteTask(${task.id})" class="delete-btn">Delete</button>
         `;
         
         taskList.appendChild(li);
     });
 }
 
-function updateCounters() {
+// Filter tasks
+function filterTasks(filter) {
+    currentFilter = filter;
+    document.querySelectorAll('.filters button').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+    renderTasks();
+}
+
+function filterTasksList(tasks, filter) {
+    switch (filter) {
+        case 'active':
+            return tasks.filter(task => !task.completed);
+        case 'completed':
+            return tasks.filter(task => task.completed);
+        case 'upcoming':
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const tomorrow = new Date(today);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            return tasks.filter(task => 
+                !task.completed && 
+                new Date(task.deadline) >= today && 
+                new Date(task.deadline) < tomorrow
+            );
+        default:
+            return [...tasks];
+    }
+}
+
+// Toggle task completion
+function toggleTask(taskId) {
+    const taskIndex = tasks.findIndex(task => task.id === taskId);
+    if (taskIndex !== -1) {
+        tasks[taskIndex].completed = !tasks[taskIndex].completed;
+        saveTasksToStorage();
+        renderTasks();
+        updateStats();
+    }
+}
+
+// Delete task
+function deleteTask(taskId) {
+    tasks = tasks.filter(task => task.id !== taskId);
+    saveTasksToStorage();
+    renderTasks();
+    updateStats();
+}
+
+// Clear completed tasks
+function clearCompleted() {
+    tasks = tasks.filter(task => !task.completed);
+    saveTasksToStorage();
+    renderTasks();
+    updateStats();
+}
+
+// Update statistics
+function updateStats() {
     document.getElementById('totalTasks').textContent = tasks.length;
     document.getElementById('completedTasks').textContent = 
         tasks.filter(task => task.completed).length;
-}
-
-function saveTasks() {
-    localStorage.setItem('tasks', JSON.stringify(tasks));
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    document.getElementById('upcomingTasks').textContent = 
+        tasks.filter(task => 
+            !task.completed && 
+            new Date(task.deadline) >= today && 
+            new Date(task.deadline) < tomorrow
+        ).length;
 }
